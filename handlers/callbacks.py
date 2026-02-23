@@ -5,9 +5,9 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from config import ADMIN_CHAT_ID
-from database import get_post, update_post_status, update_post_content
-from keyboards import approved_keyboard, rejected_keyboard, draft_keyboard
+from config import ADMIN_CHAT_ID, CHANNEL_ID
+from database import get_post, update_post_status, update_post_content, set_post_channel_message_id
+from keyboards import approved_keyboard, rejected_keyboard, draft_keyboard, published_keyboard
 from utils import format_post_card
 
 router = Router()
@@ -132,6 +132,45 @@ async def process_edit(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
     await message.answer(f"Пост #{post_id} обновлён.")
     logger.info(f"Post #{post_id} edited")
+
+
+@router.callback_query(F.data.startswith("publish_now:"))
+async def cb_publish_now(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id != ADMIN_CHAT_ID:
+        await callback.answer("Только админ.", show_alert=True)
+        return
+
+    post_id = int(callback.data.split(":")[1])
+    post = await get_post(post_id)
+    if not post:
+        await callback.answer("Пост не найден.", show_alert=True)
+        return
+
+    if post["status"] == "published":
+        await callback.answer("Уже опубликован.", show_alert=True)
+        return
+
+    # Publish to channel
+    try:
+        msg = await bot.send_message(chat_id=CHANNEL_ID, text=post["content"])
+        await update_post_status(post_id, "published")
+        await set_post_channel_message_id(post_id, msg.message_id)
+
+        post = await get_post(post_id)
+        card = format_post_card(post)
+        try:
+            await callback.message.edit_text(
+                text=card,
+                reply_markup=published_keyboard(post_id),
+            )
+        except Exception:
+            pass
+
+        await callback.answer("Опубликовано в канал!")
+        logger.info(f"Post #{post_id} published now")
+    except Exception as e:
+        logger.error(f"Publish now failed for #{post_id}: {e}")
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("noop:"))

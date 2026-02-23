@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import BOT_TOKEN, BRANDS, ADMIN_CHAT_ID
@@ -45,7 +46,22 @@ async def main():
     setup_scheduler(scheduler, bot)
     scheduler.start()
 
-    # 6. Notify admin
+    # 6. Set bot menu commands
+    await bot.set_my_commands([
+        BotCommand(command="generate", description="Генерация постов"),
+        BotCommand(command="trends", description="Тренды дня"),
+        BotCommand(command="status", description="Статистика и черновики"),
+        BotCommand(command="publish", description="Опубликовать одобренные"),
+        BotCommand(command="report", description="Недельный отчёт"),
+        BotCommand(command="competitors", description="Анализ конкурентов"),
+        BotCommand(command="run_trends", description="Собрать тренды сейчас"),
+        BotCommand(command="run_competitors", description="Анализ конкурентов сейчас"),
+        BotCommand(command="run_report", description="Отчёт сейчас"),
+        BotCommand(command="brands", description="Список брендов"),
+        BotCommand(command="help", description="Справка"),
+    ])
+
+    # 7. Notify admin
     await bot.send_message(
         ADMIN_CHAT_ID,
         "<b>SMM Agent started</b>\n\n"
@@ -58,7 +74,7 @@ async def main():
         "/help — команды",
     )
 
-    # 7. Start polling
+    # 8. Start polling
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Bot started (polling)")
 
