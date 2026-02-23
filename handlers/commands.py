@@ -37,15 +37,19 @@ async def cmd_help(message: Message):
         return
     await message.answer(
         "<b>Команды:</b>\n\n"
+        "<b>Контент:</b>\n"
         "/generate [проект] [платформа] — генерация постов\n"
-        "  Пример: /generate личный тг\n"
-        "  Без аргументов — все проекты\n\n"
+        "/publish — публикация одобренных постов\n\n"
+        "<b>Данные:</b>\n"
         "/trends — тренды сегодня\n"
         "/status — черновики и статистика\n"
         "/report — последний недельный отчёт\n"
-        "/competitors — последний анализ конкурентов\n"
-        "/brands — список брендов\n"
-        "/help — эта справка"
+        "/competitors — анализ конкурентов\n"
+        "/brands — список брендов\n\n"
+        "<b>Ручной запуск:</b>\n"
+        "/run_trends — собрать тренды сейчас\n"
+        "/run_competitors — анализ конкурентов сейчас\n"
+        "/run_report — сгенерировать отчёт сейчас"
     )
 
 
@@ -150,3 +154,54 @@ async def cmd_brands(message: Message):
         lines.append(f"  Аудитория: {brand['audience']}")
         lines.append("")
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("run_trends"))
+async def cmd_run_trends(message: Message):
+    if not _is_admin(message):
+        return
+    await message.answer("Запускаю сбор трендов...")
+    from services.trend_monitor import run_trend_monitoring
+    result = await run_trend_monitoring()
+    if result.get("error"):
+        await message.answer(f"Ошибка: {result['error']}")
+    else:
+        trends = await get_today_trends()
+        await message.answer(format_trends_card(trends))
+
+
+@router.message(Command("run_competitors"))
+async def cmd_run_competitors(message: Message):
+    if not _is_admin(message):
+        return
+    await message.answer("Запускаю анализ конкурентов...")
+    from services.competitor import run_competitor_monitoring
+    result = await run_competitor_monitoring()
+    if result.get("error"):
+        await message.answer(f"Ошибка: {result['error']}")
+    else:
+        await message.answer(f"Готово! {result.get('posts_count', 0)} постов проанализировано.")
+
+
+@router.message(Command("run_report"))
+async def cmd_run_report(message: Message):
+    if not _is_admin(message):
+        return
+    await message.answer("Генерирую недельный отчёт...")
+    from services.reporter import run_weekly_report
+    result = await run_weekly_report()
+    text = result.get("report_text", "Ошибка генерации")
+    for part in split_message(text):
+        await message.answer(part)
+
+
+@router.message(Command("publish"))
+async def cmd_publish(message: Message, bot_obj=None):
+    if not _is_admin(message):
+        return
+    from services.publisher import run_publisher
+    published = await run_publisher(message.bot)
+    if published:
+        await message.answer(f"Опубликовано {len(published)} постов.")
+    else:
+        await message.answer("Нет одобренных постов для публикации.")
