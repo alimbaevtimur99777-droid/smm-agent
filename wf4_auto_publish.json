@@ -1,0 +1,258 @@
+{
+  "name": "WF4 — Auto Publish (FIXED)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 10,14,18 * * *" }] }
+      },
+      "id": "trigger",
+      "name": "Check 3x Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_CONTENT_CALENDAR_DB_ID",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            { "key": "Status", "condition": "equals", "value": "Approved" },
+            { "key": "Scheduled Date", "condition": "equals", "value": "={{ $now.format('yyyy-MM-dd') }}" }
+          ]
+        }
+      },
+      "id": "get-approved",
+      "name": "Get Approved Posts",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [300, 300],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nif (!items || items.length === 0) {\n  return [{ json: { hasItems: false } }];\n}\n\nreturn items.map(item => {\n  const props = item.json.properties || {};\n  return {\n    json: {\n      hasItems: true,\n      page_id: item.json.id,\n      project: props.Project?.select?.name || '',\n      platform: props.Platform?.select?.name?.toLowerCase() || '',\n      content: props.Content?.rich_text?.[0]?.plain_text || '',\n      scheduled_date: props['Scheduled Date']?.date?.start || ''\n    }\n  };\n});"
+      },
+      "id": "extract",
+      "name": "Extract Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "leftValue": "={{ $json.hasItems }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }]
+        }
+      },
+      "id": "has-posts",
+      "name": "Has Posts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "ℹ️ Нет одобренных постов на сегодня ({{ $now.format('HH:mm') }})",
+        "additionalFields": {}
+      },
+      "id": "notify-empty",
+      "name": "Notify — No Posts",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [900, 480],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.platform }}", "rightValue": "telegram", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "telegram" },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.platform }}", "rightValue": "instagram", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "instagram" },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.platform }}", "rightValue": "facebook", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "facebook" },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.platform }}", "rightValue": "linkedin", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "linkedin" }
+          ]
+        }
+      },
+      "id": "route-platform",
+      "name": "Route by Platform",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHANNEL_ID",
+        "text": "={{ $json.content }}",
+        "additionalFields": {}
+      },
+      "id": "pub-tg",
+      "name": "Publish Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1100, 100],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://app.ayrshare.com/api/post",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Authorization", "value": "Bearer YOUR_AYRSHARE_API_KEY" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"post\": \"{{ $json.content }}\", \"platforms\": [\"instagram\"] }",
+        "options": {}
+      },
+      "id": "pub-ig",
+      "name": "Publish Instagram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://app.ayrshare.com/api/post",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Authorization", "value": "Bearer YOUR_AYRSHARE_API_KEY" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"post\": \"{{ $json.content }}\", \"platforms\": [\"facebook\"] }",
+        "options": {}
+      },
+      "id": "pub-fb",
+      "name": "Publish Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://app.ayrshare.com/api/post",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Authorization", "value": "Bearer YOUR_AYRSHARE_API_KEY" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"post\": \"{{ $json.content }}\", \"platforms\": [\"linkedin\"] }",
+        "options": {}
+      },
+      "id": "pub-li",
+      "name": "Publish LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Проверяем успешность публикации\nconst result = $input.first().json;\nconst platform = $('Extract Posts').item.json.platform;\nconst page_id = $('Extract Posts').item.json.page_id;\nconst project = $('Extract Posts').item.json.project;\n\n// Для Telegram — проверяем наличие message_id\n// Для Ayrshare — проверяем status == 'success'\nconst isSuccess = result.message_id || result.status === 'success' || result.postIds;\n\nreturn [{ json: { page_id, platform, project, isSuccess, result } }];"
+      },
+      "id": "check-success",
+      "name": "Check Publish Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "leftValue": "={{ $json.isSuccess }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }]
+        }
+      },
+      "id": "published-ok",
+      "name": "Published OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": "={{ $json.page_id }}",
+        "propertiesUi": {
+          "propertyValues": [{ "key": "Status", "type": "select", "selectValue": "Published" }]
+        }
+      },
+      "id": "mark-published",
+      "name": "Mark Published",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1700, 200],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": "={{ $json.page_id }}",
+        "propertiesUi": {
+          "propertyValues": [{ "key": "Status", "type": "select", "selectValue": "Error" }]
+        }
+      },
+      "id": "mark-error",
+      "name": "Mark Error",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1700, 420],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=✅ Опубликовано!\n📁 {{ $json.project }} / {{ $json.platform }}\n🕐 {{ $now.format('HH:mm') }}",
+        "additionalFields": {}
+      },
+      "id": "notify-ok",
+      "name": "Notify — Published",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1900, 200],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=❌ Ошибка публикации!\n📁 {{ $json.project }} / {{ $json.platform }}\nПроверь Notion — статус Error",
+        "additionalFields": {}
+      },
+      "id": "notify-err",
+      "name": "Notify — Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1900, 420],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    }
+  ],
+  "connections": {
+    "Check 3x Daily": { "main": [[{ "node": "Get Approved Posts", "type": "main", "index": 0 }]] },
+    "Get Approved Posts": { "main": [[{ "node": "Extract Posts", "type": "main", "index": 0 }]] },
+    "Extract Posts": { "main": [[{ "node": "Has Posts?", "type": "main", "index": 0 }]] },
+    "Has Posts?": {
+      "true": [[{ "node": "Route by Platform", "type": "main", "index": 0 }]],
+      "false": [[{ "node": "Notify — No Posts", "type": "main", "index": 0 }]]
+    },
+    "Route by Platform": {
+      "telegram": [[{ "node": "Publish Telegram", "type": "main", "index": 0 }]],
+      "instagram": [[{ "node": "Publish Instagram", "type": "main", "index": 0 }]],
+      "facebook": [[{ "node": "Publish Facebook", "type": "main", "index": 0 }]],
+      "linkedin": [[{ "node": "Publish LinkedIn", "type": "main", "index": 0 }]]
+    },
+    "Publish Telegram": { "main": [[{ "node": "Check Publish Result", "type": "main", "index": 0 }]] },
+    "Publish Instagram": { "main": [[{ "node": "Check Publish Result", "type": "main", "index": 0 }]] },
+    "Publish Facebook": { "main": [[{ "node": "Check Publish Result", "type": "main", "index": 0 }]] },
+    "Publish LinkedIn": { "main": [[{ "node": "Check Publish Result", "type": "main", "index": 0 }]] },
+    "Check Publish Result": { "main": [[{ "node": "Published OK?", "type": "main", "index": 0 }]] },
+    "Published OK?": {
+      "true": [[{ "node": "Mark Published", "type": "main", "index": 0 }]],
+      "false": [[{ "node": "Mark Error", "type": "main", "index": 0 }]]
+    },
+    "Mark Published": { "main": [[{ "node": "Notify — Published", "type": "main", "index": 0 }]] },
+    "Mark Error": { "main": [[{ "node": "Notify — Error", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

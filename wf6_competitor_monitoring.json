@@ -1,0 +1,199 @@
+{
+  "name": "WF6 — Competitor Monitoring (FIXED)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 6 * * *" }] }
+      },
+      "id": "trigger",
+      "name": "Daily 6AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://rsshub.app/telegram/channel/YOUR_COMPETITOR_1",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; SMM-Agent/1.0)" }] },
+        "options": {
+          "response": { "response": { "responseFormat": "text" } },
+          "timeout": 10000
+        }
+      },
+      "id": "competitor-1",
+      "name": "Competitor Channel 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [300, 180]
+    },
+    {
+      "parameters": {
+        "url": "https://rsshub.app/telegram/channel/YOUR_COMPETITOR_2",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; SMM-Agent/1.0)" }] },
+        "options": {
+          "response": { "response": { "responseFormat": "text" } },
+          "timeout": 10000
+        }
+      },
+      "id": "competitor-2",
+      "name": "Competitor Channel 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [300, 340]
+    },
+    {
+      "parameters": {
+        "url": "https://rsshub.app/telegram/channel/YOUR_COMPETITOR_3",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; SMM-Agent/1.0)" }] },
+        "options": {
+          "response": { "response": { "responseFormat": "text" } },
+          "timeout": 10000
+        }
+      },
+      "id": "competitor-3",
+      "name": "Competitor Channel 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [300, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "merge-competitors",
+      "name": "Merge Competitor Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [500, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst posts = [];\n\nfor (const item of allItems) {\n  // Данные могут быть строкой (responseFormat: text) или объектом\n  const body = item.json?.data || item.json?.body || '';\n  const sourceUrl = item.json?.url || '';\n  \n  if (!body) continue;\n  \n  // CDATA titles (Telegram RSS via RSSHub)\n  const cdata = [...body.matchAll(/<title><!\\[CDATA\\[([^\\]]{10,200})\\]\\]>/g)]\n    .map(m => m[1].trim());\n  \n  // Обычные titles\n  const plain = [...body.matchAll(/<title>([^<]{10,150})<\\/title>/g)]\n    .map(m => m[1].trim())\n    .filter(t => !t.startsWith('http') && !t.includes('<?'));\n  \n  // Descriptions (первые 200 символов)\n  const descs = [...body.matchAll(/<description><!\\[CDATA\\[([^\\]]{20,}?)\\]\\]>/g)]\n    .map(m => m[1].replace(/<[^>]+>/g, '').trim().slice(0, 200));\n  \n  const titles = [...new Set([...cdata, ...plain])].slice(0, 8);\n  \n  titles.forEach((t, i) => {\n    posts.push({ title: t, description: descs[i] || '', source: sourceUrl });\n  });\n}\n\nif (posts.length === 0) {\n  return [{ json: { noPosts: true, message: 'Не удалось получить данные от конкурентов' } }];\n}\n\nreturn [{ json: { posts: posts.slice(0, 20), count: posts.length, date: new Date().toISOString().split('T')[0] } }];"
+      },
+      "id": "parse-competitor-posts",
+      "name": "Parse Competitor Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "leftValue": "={{ $json.noPosts }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }]
+        }
+      },
+      "id": "check-data",
+      "name": "Has Data?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 340]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "⚠️ Мониторинг конкурентов: не удалось получить данные сегодня. Проверь RSSHub или добавь другие источники.",
+        "additionalFields": {}
+      },
+      "id": "notify-no-data",
+      "name": "Notify No Data",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1100, 500],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 900,\n  \"system\": \"Ты стратег по контент-маркетингу. Анализируй конкурентов и давай actionable инсайты. Отвечай строго JSON без markdown.\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Контент конкурентов ({{ $json.count }} постов):\\n{{ $json.posts.map(p => p.title + (p.description ? ': ' + p.description : '')).join('\\\\n---\\\\n') }}\\n\\nОтрасль: телекоммуникации, B2B оборудование, маркетинг (Узбекистан/СНГ)\\n\\nВерни JSON анализ:\\n{\\n  \\\"hot_topics\\\": [\\\"топ темы которые они освещают\\\"],\\n  \\\"content_gaps\\\": [\\\"что НЕ освещают — возможность для нас\\\"],\\n  \\\"best_formats\\\": [\\\"форматы которые работают у них\\\"],\\n  \\\"our_opportunities\\\": [\\\"конкретные идеи постов для наших проектов\\\"],\\n  \\\"urgent_alert\\\": \\\"срочное если есть, иначе пустая строка\\\"\\n}\\n\\nВерни ТОЛЬКО JSON.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "claude-analyze",
+      "name": "Claude — Analyze",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst rawText = response.content?.[0]?.text || '{}';\nconst date = $('Parse Competitor Posts').item.json.date;\n\nlet analysis = {};\ntry {\n  const clean = rawText.replace(/```json|```/g, '').trim();\n  analysis = JSON.parse(clean);\n} catch(e) {\n  const match = rawText.match(/\\{[\\s\\S]*\\}/);\n  if (match) try { analysis = JSON.parse(match[0]); } catch(e2) { analysis = {}; }\n}\n\nreturn [{ json: { analysis, date } }];"
+      },
+      "id": "parse-analysis",
+      "name": "Parse Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "YOUR_NOTION_KNOWLEDGE_BASE_DB_ID",
+        "title": "=Конкуренты {{ $json.date }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Type", "type": "select", "selectValue": "Инсайт" },
+            { "key": "Content", "type": "rich_text", "textValue": "=Горячие темы: {{ $json.analysis.hot_topics?.join(', ') }}\\n\\nПробелы конкурентов: {{ $json.analysis.content_gaps?.join(', ') }}\\n\\nНаши возможности: {{ $json.analysis.our_opportunities?.join(', ') }}" },
+            { "key": "Date", "type": "date", "dateValue": "={{ $json.date }}" }
+          ]
+        }
+      },
+      "id": "save-to-kb",
+      "name": "Save to Knowledge Base",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1500, 300],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🕵️ Конкуренты {{ $json.date }}\n\n🔥 Горячие темы:\n• {{ $json.analysis.hot_topics?.join('\\n• ') || 'нет данных' }}\n\n💡 Что они не освещают (наши возможности):\n• {{ $json.analysis.content_gaps?.join('\\n• ') || 'нет данных' }}\n\n🎯 Идеи постов для нас:\n• {{ $json.analysis.our_opportunities?.join('\\n• ') || 'нет данных' }}\n\n{{ $json.analysis.urgent_alert ? '⚠️ СРОЧНО: ' + $json.analysis.urgent_alert : '' }}",
+        "additionalFields": {}
+      },
+      "id": "send-insights",
+      "name": "Send Insights",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1700, 300],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    }
+  ],
+  "connections": {
+    "Daily 6AM": {
+      "main": [[
+        { "node": "Competitor Channel 1", "type": "main", "index": 0 },
+        { "node": "Competitor Channel 2", "type": "main", "index": 0 },
+        { "node": "Competitor Channel 3", "type": "main", "index": 0 }
+      ]]
+    },
+    "Competitor Channel 1": { "main": [[{ "node": "Merge Competitor Data", "type": "main", "index": 0 }]] },
+    "Competitor Channel 2": { "main": [[{ "node": "Merge Competitor Data", "type": "main", "index": 1 }]] },
+    "Competitor Channel 3": { "main": [[{ "node": "Merge Competitor Data", "type": "main", "index": 2 }]] },
+    "Merge Competitor Data": { "main": [[{ "node": "Parse Competitor Posts", "type": "main", "index": 0 }]] },
+    "Parse Competitor Posts": { "main": [[{ "node": "Has Data?", "type": "main", "index": 0 }]] },
+    "Has Data?": {
+      "false": [[{ "node": "Claude — Analyze", "type": "main", "index": 0 }]],
+      "true": [[{ "node": "Notify No Data", "type": "main", "index": 0 }]]
+    },
+    "Claude — Analyze": { "main": [[{ "node": "Parse Analysis", "type": "main", "index": 0 }]] },
+    "Parse Analysis": { "main": [[{ "node": "Save to Knowledge Base", "type": "main", "index": 0 }]] },
+    "Save to Knowledge Base": { "main": [[{ "node": "Send Insights", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

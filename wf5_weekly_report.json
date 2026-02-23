@@ -1,0 +1,155 @@
+{
+  "name": "WF5 — Weekly Report (FIXED)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1" }] }
+      },
+      "id": "trigger",
+      "name": "Every Monday 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_CONTENT_CALENDAR_DB_ID",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            { "key": "Status", "condition": "equals", "value": "Published" },
+            { "key": "Scheduled Date", "condition": "after", "value": "={{ $now.minus(7, 'day').format('yyyy-MM-dd') }}" }
+          ]
+        }
+      },
+      "id": "get-posts",
+      "name": "Get Last Week Posts",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [300, 200],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_KNOWLEDGE_BASE_DB_ID",
+        "filterType": "manual",
+        "filters": { "conditions": [{ "key": "Type", "condition": "equals", "value": "Лучший пост" }] },
+        "limit": 5
+      },
+      "id": "get-kb",
+      "name": "Get Knowledge Base",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [300, 400],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByIndex",
+        "options": {}
+      },
+      "id": "merge",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Читаем обе нодыx напрямую\nconst posts = $('Get Last Week Posts').all();\nconst kb = $('Get Knowledge Base').all();\n\nconst weekStart = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];\nconst weekEnd = new Date().toISOString().split('T')[0];\n\n// Группируем посты по проектам\nconst byProject = {};\nfor (const item of posts) {\n  const props = item.json.properties || {};\n  const project = props.Project?.select?.name || 'Unknown';\n  const platform = props.Platform?.select?.name || '';\n  const engagement = props.Engagement?.number || 0;\n  const reach = props.Reach?.number || 0;\n  const content = props.Content?.rich_text?.[0]?.plain_text?.slice(0, 150) || '';\n\n  if (!byProject[project]) byProject[project] = { posts: [], totalReach: 0, totalEngagement: 0, count: 0 };\n  byProject[project].posts.push({ platform, engagement, reach, content });\n  byProject[project].totalReach += reach;\n  byProject[project].totalEngagement += engagement;\n  byProject[project].count++;\n}\n\n// ER по проектам\nfor (const [proj, data] of Object.entries(byProject)) {\n  data.avgER = data.totalReach > 0 ? ((data.totalEngagement / data.totalReach) * 100).toFixed(1) : '0';\n}\n\n// База знаний\nconst insights = kb.map(k => k.json.properties?.Content?.rich_text?.[0]?.plain_text || '').filter(Boolean);\n\nreturn [{ json: { byProject, insights, weekStart, weekEnd, totalPosts: posts.length } }];"
+      },
+      "id": "aggregate",
+      "name": "Aggregate Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1800,\n  \"system\": \"Ты аналитик SMM. Пиши отчёты конкретно, без воды. Только цифры и действия.\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Создай еженедельный SMM отчёт.\\n\\nПериод: {{ $json.weekStart }} — {{ $json.weekEnd }}\\nВсего постов: {{ $json.totalPosts }}\\n\\nСтатистика:\\n{{ JSON.stringify($json.byProject, null, 2) }}\\n\\nБаза знаний (что работало раньше):\\n{{ $json.insights.join('\\\\n') || 'пусто' }}\\n\\nФормат отчёта:\\n📊 ОТЧЁТ {{ $json.weekStart }} — {{ $json.weekEnd }}\\n\\nДля каждого проекта:\\n[Название]\\n• Постов: X\\n• Охват: X\\n• ER: X%\\n• Лучшая платформа: X\\n• Что сработало: [1 инсайт]\\n• Рекомендация: [1 конкретное действие]\\n\\n🎯 ИТОГИ НЕДЕЛИ:\\n• Топ-3 вывода\\n• Фокус следующей недели\\n\\nПиши кратко.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "claude-report",
+      "name": "Claude — Generate Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst reportText = response.content?.[0]?.text || 'Ошибка генерации отчёта';\nconst agg = $('Aggregate Stats').item.json;\n\nreturn [{ json: { reportText, weekStart: agg.weekStart, weekEnd: agg.weekEnd } }];"
+      },
+      "id": "extract-report",
+      "name": "Extract Report Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "YOUR_NOTION_REPORTS_DB_ID",
+        "title": "=Отчёт {{ $json.weekStart }} — {{ $json.weekEnd }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Week", "type": "date", "dateValue": "={{ $json.weekStart }}" },
+            { "key": "Insights", "type": "rich_text", "textValue": "={{ $json.reportText }}" }
+          ]
+        }
+      },
+      "id": "save-report",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1300, 300],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $('Extract Report Text').item.json.reportText.slice(0, 4000) }}",
+        "additionalFields": {}
+      },
+      "id": "send-report",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 300],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    }
+  ],
+  "connections": {
+    "Every Monday 9AM": {
+      "main": [[
+        { "node": "Get Last Week Posts", "type": "main", "index": 0 },
+        { "node": "Get Knowledge Base", "type": "main", "index": 0 }
+      ]]
+    },
+    "Get Last Week Posts": { "main": [[{ "node": "Merge", "type": "main", "index": 0 }]] },
+    "Get Knowledge Base": { "main": [[{ "node": "Merge", "type": "main", "index": 1 }]] },
+    "Merge": { "main": [[{ "node": "Aggregate Stats", "type": "main", "index": 0 }]] },
+    "Aggregate Stats": { "main": [[{ "node": "Claude — Generate Report", "type": "main", "index": 0 }]] },
+    "Claude — Generate Report": { "main": [[{ "node": "Extract Report Text", "type": "main", "index": 0 }]] },
+    "Extract Report Text": { "main": [[{ "node": "Save to Notion", "type": "main", "index": 0 }]] },
+    "Save to Notion": { "main": [[{ "node": "Send Report", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

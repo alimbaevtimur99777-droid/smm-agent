@@ -1,0 +1,272 @@
+{
+  "name": "WF3 — Telegram Bot (FIXED)",
+  "nodes": [
+    {
+      "parameters": { "updates": ["message"] },
+      "id": "tg-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "webhookId": "smm-bot-v3",
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// SECURITY: разрешаем только твой chat_id\nconst ALLOWED = 123456789; // ← ЗАМЕНИ на свой числовой chat_id\n\nconst msg = $input.first().json.message || {};\nconst chatId = msg.chat?.id;\nconst text = (msg.text || '').trim();\n\nif (chatId !== ALLOWED) {\n  return [{ json: { blocked: true, chatId } }];\n}\n\nconst parts = text.split(' ');\nconst command = parts[0]?.toLowerCase() || '';\nconst argsRaw = parts.slice(1).join(' ');\nconst args = argsRaw.toLowerCase();\n\n// Определяем проект\nconst projectMap = [\n  ['личный', 'personal_brand', 'Личный Бренд'],\n  ['лидер', 'leader_team', 'Лидер Тим'],\n  ['пикси', 'pixie', 'Пикси']\n];\nlet projectId = null, projectName = null;\nfor (const [key, id, name] of projectMap) {\n  if (args.includes(key)) { projectId = id; projectName = name; break; }\n}\n\n// Определяем платформу\nconst platformMap = [\n  ['инста', 'instagram'], ['instagram', 'instagram'],\n  ['тг', 'telegram'], ['telegram', 'telegram'],\n  ['фб', 'facebook'], ['facebook', 'facebook'],\n  ['лин', 'linkedin'], ['linkedin', 'linkedin']\n];\nlet platform = null;\nfor (const [key, val] of platformMap) {\n  if (args.includes(key)) { platform = val; break; }\n}\n\nreturn [{ json: { blocked: false, command, chatId, projectId, projectName, platform, argsRaw } }];"
+      },
+      "id": "guard",
+      "name": "Security Guard + Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "leftValue": "={{ $json.blocked }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }]
+        }
+      },
+      "id": "check-blocked",
+      "name": "Blocked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/generate", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "generate" },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/trends", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "trends" },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/status", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "status" },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/report", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "report" },
+            { "conditions": { "conditions": [{ "leftValue": "={{ $json.command }}", "rightValue": "/help", "operator": { "type": "string", "operation": "equals" } }] }, "renameOutput": true, "outputKey": "help" }
+          ]
+        }
+      },
+      "id": "router",
+      "name": "Route Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [700, 200]
+    },
+
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_KNOWLEDGE_BASE_DB_ID",
+        "filterType": "manual",
+        "filters": { "conditions": [{ "key": "Applied", "condition": "equals", "value": true }] },
+        "limit": 5
+      },
+      "id": "get-kb",
+      "name": "Get Knowledge Base",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [900, 80],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const kbItems = $('Get Knowledge Base').all();\nconst cmd = $('Route Command').item.json;\n\nconst insights = kbItems\n  .map(k => k.json.properties?.Content?.rich_text?.[0]?.plain_text || '')\n  .filter(Boolean)\n  .slice(0, 5);\n\nreturn [{ json: { ...cmd, insights } }];"
+      },
+      "id": "combine-kb",
+      "name": "Combine KB with Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1200,\n  \"system\": \"Ты профессиональный SMM-специалист. Строго соблюдай голос каждого проекта.\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Создай пост.\\n\\nПРОЕКТ: {{ $json.projectName }}\\nПЛАТФОРМА: {{ $json.platform }}\\n\\nПроекты:\\n- Личный Бренд: маркетинг-эксперт, вдохновляющий, рус/узб, ЦА: предприниматели\\n- Лидер Тим: B2B телеком оборудование, деловой, рус, ЦА: IT-директора\\n- Пикси: производство телеком, технологичный, рус, ЦА: интеграторы\\n\\nПлатформы:\\n- instagram: крючок + 150-300 слов + 10-15 хэштегов + CTA\\n- telegram: разговорный + 100-250 слов + без хэштегов\\n- facebook: информативный + 200-400 слов + 3-5 хэштегов + вопрос\\n- linkedin: деловой + инсайт/кейс + 150-300 слов + 3-5 хэштегов\\n\\nЧТО РАБОТАЛО ХОРОШО РАНЬШЕ:\\n{{ $json.insights.length > 0 ? $json.insights.join('\\\\n') : 'нет данных' }}\\n\\nВерни ТОЛЬКО текст поста без объяснений.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "claude-gen",
+      "name": "Claude — Generate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1300, 80]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Security Guard + Parse').item.json.chatId }}",
+        "text": "=📝 {{ $('Combine KB with Command').item.json.projectName }} / {{ $('Combine KB with Command').item.json.platform }}\n\n{{ $json.content?.[0]?.text || 'Ошибка генерации' }}",
+        "additionalFields": {}
+      },
+      "id": "send-gen",
+      "name": "Send Generated Post",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 80],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_TRENDS_DB_ID",
+        "filterType": "manual",
+        "filters": { "conditions": [{ "key": "Date", "condition": "equals", "value": "={{ $now.format('yyyy-MM-dd') }}" }] },
+        "limit": 1
+      },
+      "id": "get-trends-today",
+      "name": "Get Today Trends",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [900, 240],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst chatId = $('Security Guard + Parse').item.json.chatId;\n\nif (!items || items.length === 0) {\n  return [{ json: { chatId, text: '📭 Тренды на сегодня ещё не сгенерированы. Запускаю в 07:00.' } }];\n}\n\nconst props = items[0].json.properties || {};\nconst pb_t = props['Personal Brand Trend']?.rich_text?.[0]?.plain_text || 'нет данных';\nconst pb_i = props['Personal Brand Idea']?.rich_text?.[0]?.plain_text || '';\nconst lt_t = props['Leader Team Trend']?.rich_text?.[0]?.plain_text || 'нет данных';\nconst lt_i = props['Leader Team Idea']?.rich_text?.[0]?.plain_text || '';\nconst px_t = props['Pixie Trend']?.rich_text?.[0]?.plain_text || 'нет данных';\nconst px_i = props['Pixie Idea']?.rich_text?.[0]?.plain_text || '';\nconst date = props['Date']?.date?.start || 'сегодня';\n\nconst text = `🔥 Тренды ${date}\\n\\n👤 ЛИЧНЫЙ БРЕНД\\n📌 ${pb_t}\\n💡 ${pb_i}\\n\\n🏢 ЛИДЕР ТИМ\\n📌 ${lt_t}\\n💡 ${lt_i}\\n\\n⚡ ПИКСИ\\n📌 ${px_t}\\n💡 ${px_i}`;\n\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "format-trends",
+      "name": "Format Trends",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 240]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "send-trends",
+      "name": "Send Trends",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1300, 240],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_CONTENT_CALENDAR_DB_ID",
+        "filterType": "manual",
+        "filters": { "conditions": [{ "key": "Status", "condition": "equals", "value": "Draft" }] }
+      },
+      "id": "get-drafts",
+      "name": "Get Drafts",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [900, 400],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const drafts = $input.all();\nconst chatId = $('Security Guard + Parse').item.json.chatId;\n\nconst byProject = {};\nfor (const d of drafts) {\n  const props = d.json.properties || {};\n  const proj = props.Project?.select?.name || 'Unknown';\n  const plat = props.Platform?.select?.name || '';\n  if (!byProject[proj]) byProject[proj] = [];\n  byProject[proj].push(plat);\n}\n\nconst lines = Object.entries(byProject)\n  .map(([p, pl]) => `📁 ${p}: ${pl.join(', ')} (${pl.length})`)\n  .join('\\n');\n\nconst text = `📊 Статус агента\\n✅ Активен\\n🕐 ${new Date().toLocaleString('ru-RU', {timeZone: 'Asia/Tashkent'})}\\n\\n📋 Черновиков (Draft): ${drafts.length}\\n${lines || 'Нет черновиков'}\\n\\nРасписание:\\n• 06:00 — конкуренты\\n• 07:00 — тренды\\n• 08:00 — генерация постов\\n• 10/14/18 — публикация\\n• пн 09:00 — отчёт`;\n\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "format-status",
+      "name": "Format Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "send-status",
+      "name": "Send Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1300, 400],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_REPORTS_DB_ID",
+        "filterType": "manual",
+        "limit": 1
+      },
+      "id": "get-last-report",
+      "name": "Get Last Report",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [900, 560],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const reports = $input.all();\nconst chatId = $('Security Guard + Parse').item.json.chatId;\n\nif (!reports || reports.length === 0) {\n  return [{ json: { chatId, text: '📭 Отчётов пока нет. Первый придёт в понедельник в 09:00.' } }];\n}\n\nconst props = reports[0].json.properties || {};\nconst insights = props.Insights?.rich_text?.[0]?.plain_text || 'Нет данных';\nconst week = props.Week?.date?.start || '';\n\nconst text = `📈 Последний отчёт (${week}):\\n\\n${insights.slice(0, 3000)}`;\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "format-report",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 560]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "send-report",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1300, 560],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "🤖 SMM Агент — Команды:\n\n📝 /generate [проект] [платформа]\nПример: /generate лидер инста\n\n🔥 /trends — тренды дня\n\n📊 /status — статус и черновики\n\n📈 /report — последний отчёт\n\n❓ /help — эта справка\n\n─────────────────\nПроекты: личный | лидер | пикси\nПлатформы: инста | тг | фб | лин",
+        "additionalFields": {}
+      },
+      "id": "send-help",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [900, 720],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Security Guard + Parse", "type": "main", "index": 0 }]] },
+    "Security Guard + Parse": { "main": [[{ "node": "Blocked?", "type": "main", "index": 0 }]] },
+    "Blocked?": { "false": [[{ "node": "Route Command", "type": "main", "index": 0 }]] },
+    "Route Command": {
+      "generate": [[{ "node": "Get Knowledge Base", "type": "main", "index": 0 }]],
+      "trends": [[{ "node": "Get Today Trends", "type": "main", "index": 0 }]],
+      "status": [[{ "node": "Get Drafts", "type": "main", "index": 0 }]],
+      "report": [[{ "node": "Get Last Report", "type": "main", "index": 0 }]],
+      "help": [[{ "node": "Send Help", "type": "main", "index": 0 }]]
+    },
+    "Get Knowledge Base": { "main": [[{ "node": "Combine KB with Command", "type": "main", "index": 0 }]] },
+    "Combine KB with Command": { "main": [[{ "node": "Claude — Generate", "type": "main", "index": 0 }]] },
+    "Claude — Generate": { "main": [[{ "node": "Send Generated Post", "type": "main", "index": 0 }]] },
+    "Get Today Trends": { "main": [[{ "node": "Format Trends", "type": "main", "index": 0 }]] },
+    "Format Trends": { "main": [[{ "node": "Send Trends", "type": "main", "index": 0 }]] },
+    "Get Drafts": { "main": [[{ "node": "Format Status", "type": "main", "index": 0 }]] },
+    "Format Status": { "main": [[{ "node": "Send Status", "type": "main", "index": 0 }]] },
+    "Get Last Report": { "main": [[{ "node": "Format Report", "type": "main", "index": 0 }]] },
+    "Format Report": { "main": [[{ "node": "Send Report", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

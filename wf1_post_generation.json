@@ -1,0 +1,415 @@
+{
+  "name": "WF1 — Post Generation (FIXED)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Daily 8AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_PROJECTS_DB_ID",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Active",
+              "condition": "equals",
+              "value": true
+            }
+          ]
+        }
+      },
+      "id": "get-projects",
+      "name": "Get Active Projects",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        300,
+        200
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_TRENDS_DB_ID",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Date",
+              "condition": "equals",
+              "value": "={{ $now.format('yyyy-MM-dd') }}"
+            }
+          ]
+        }
+      },
+      "id": "get-trends",
+      "name": "Get Today Trends",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        300,
+        400
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByIndex",
+        "options": {}
+      },
+      "id": "merge",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const projects = $('Get Active Projects').all();\nconst trendsItems = $('Get Today Trends').all();\nconst trendsData = trendsItems[0]?.json?.properties || {};\n\n// Knowledge Base — последние 10 инсайтов (Applied = true)\nconst kbItems = $('Get Knowledge Base').all();\nconst globalInsights = kbItems\n  .map(k => k.json.properties?.Content?.rich_text?.[0]?.plain_text || '')\n  .filter(Boolean)\n  .slice(0, 10);\n\nconst result = [];\n\nfor (const proj of projects) {\n  const props = proj.json.properties || {};\n  const projectName = props.Name?.title?.[0]?.plain_text || 'Unknown';\n  const projectId = props.ID?.rich_text?.[0]?.plain_text || projectName.toLowerCase().replace(/ /g, '_');\n  const niche = props.Niche?.select?.name || '';\n  const tone = props.Tone?.select?.name || 'professional';\n  const language = props.Language?.select?.name || 'ru';\n  const audience = props.Audience?.rich_text?.[0]?.plain_text || '';\n  const systemPrompt = props['System Prompt']?.rich_text?.[0]?.plain_text || '';\n  const platforms = props.Platforms?.multi_select?.map(p => p.name.toLowerCase()) || ['instagram', 'telegram'];\n\n  // Тренд и идея для этого проекта\n  const trendKey = projectId === 'personal_brand' ? 'Personal Brand Trend'\n    : projectId === 'leader_team' ? 'Leader Team Trend' : 'Pixie Trend';\n  const ideaKey = projectId === 'personal_brand' ? 'Personal Brand Idea'\n    : projectId === 'leader_team' ? 'Leader Team Idea' : 'Pixie Idea';\n  const trend = trendsData[trendKey]?.rich_text?.[0]?.plain_text || '';\n  const idea = trendsData[ideaKey]?.rich_text?.[0]?.plain_text || '';\n\n  // Инсайты только для этого проекта из Knowledge Base\n  const projectInsights = kbItems\n    .filter(k => {\n      const kbProj = k.json.properties?.Project?.select?.name || '';\n      return kbProj === projectName || kbProj === '';\n    })\n    .map(k => {\n      const p = k.json.properties || {};\n      const type = p.Type?.select?.name || '';\n      const content = p.Content?.rich_text?.[0]?.plain_text || '';\n      const metric = p.Metric?.number;\n      return metric ? `[${type}] ${content} (ER: ${metric}%)` : `[${type}] ${content}`;\n    })\n    .filter(Boolean)\n    .slice(0, 8);\n\n  for (const platform of platforms) {\n    result.push({\n      json: {\n        projectId, projectName, niche, tone, language, audience,\n        systemPrompt, platform, trend, idea,\n        insights: projectInsights.length > 0 ? projectInsights : globalInsights.slice(0, 5)\n      }\n    });\n  }\n}\n\nreturn result;"
+      },
+      "id": "split-tasks",
+      "name": "Split into Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1200,\n  \"system\": \"{{ $json.systemPrompt || 'Ты профессиональный SMM-специалист.' }}\\n\\nГЛАВНЫЕ ПРИНЦИПЫ:\\n1. Качество важнее количества — лучше один сильный пост чем слабый\\n2. Строго соблюдай голос бренда — перед написанием спроси себя: это мог бы сказать именно этот бренд?\\n3. Учись на базе знаний — анализируй что работало и применяй\\n4. Фильтруй тренды — если тренд не подходит нише, используй вечнозелёную тему\\n5. Чередуй форматы — не повторяй один формат 2 раза подряд\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Создай пост для {{ $json.platform }}.\\n\\nПРОЕКТ: {{ $json.projectName }}\\nНИША: {{ $json.niche }}\\nТОН: {{ $json.tone }}\\nЯЗЫК: {{ $json.language }}\\nАУДИТОРИЯ: {{ $json.audience }}\\n\\nТРЕНД ДНЯ: {{ $json.trend || 'нет тренда — используй вечнозелёную тему' }}\\nИДЕЯ: {{ $json.idea || '' }}\\n\\nБАЗА ЗНАНИЙ (что работало и не работало раньше):\\n{{ $json.insights && $json.insights.length > 0 ? $json.insights.join('\\\\n') : 'база знаний пока пуста — генерируй на основе лучших практик' }}\\n\\nАЛГОРИТМ (выполни перед написанием):\\n1. Проверь тренд: релевантен ли он нише '{{ $json.niche }}' и аудитории '{{ $json.audience }}'?\\n   Если нет — выбери другую тему из ниши\\n2. Прочитай базу знаний: какой формат давал лучший результат?\\n   Выбери формат который НЕ повторяет последний использованный\\n   Доступные форматы: кейс | инсайт/мнение | обучение/советы | история | данные+анализ | вопрос к аудитории\\n3. Напиши пост строго в голосе бренда\\n4. Проверь: 'Это точно {{ $json.projectName }} говорит?' — если нет, перепиши\\n\\nТРЕБОВАНИЯ ПО ПЛАТФОРМЕ:\\n- instagram: крючок в первой строке (max 8 слов) + 150-300 слов + 10-15 хэштегов + CTA\\n- telegram: разговорный + эмодзи умеренно + 100-250 слов + без хэштегов\\n- facebook: открывающий вопрос + 200-400 слов + 3-5 хэштегов + вопрос в конце\\n- linkedin: сильный тезис + инсайт или кейс + 150-300 слов + 3-5 хэштегов\\n\\nВерни ТОЛЬКО текст поста без объяснений.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "claude-api",
+      "name": "Claude API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\n// Извлекаем текст из Anthropic API response\nconst text = response.content?.[0]?.text || response.error?.message || 'Error generating post';\nconst prev = $('Split into Tasks').item.json;\n\nreturn [{ json: { ...prev, generatedText: text } }];"
+      },
+      "id": "extract-text",
+      "name": "Extract Generated Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "YOUR_NOTION_CONTENT_CALENDAR_DB_ID",
+        "title": "={{ $json.projectName }} | {{ $json.platform }} | {{ $now.format('dd.MM.yyyy') }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Project",
+              "type": "select",
+              "selectValue": "={{ $json.projectName }}"
+            },
+            {
+              "key": "Platform",
+              "type": "select",
+              "selectValue": "={{ $json.platform }}"
+            },
+            {
+              "key": "Content",
+              "type": "rich_text",
+              "textValue": "={{ $json.generatedText }}"
+            },
+            {
+              "key": "Status",
+              "type": "select",
+              "selectValue": "Draft"
+            },
+            {
+              "key": "Category",
+              "type": "select",
+              "selectValue": "Тренд"
+            },
+            {
+              "key": "Scheduled Date",
+              "type": "date",
+              "dateValue": "={{ $now.plus(1, 'day').format('yyyy-MM-dd') }}"
+            },
+            {
+              "key": "Created By",
+              "type": "select",
+              "selectValue": "Agent"
+            }
+          ]
+        }
+      },
+      "id": "save-to-notion",
+      "name": "Save to Content Calendar",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Группируем все посты для одного итогового уведомления\nconst items = $input.all();\nconst byProject = {};\nfor (const item of items) {\n  const p = item.json.projectName;\n  if (!byProject[p]) byProject[p] = [];\n  byProject[p].push(item.json.platform);\n}\nconst summary = Object.entries(byProject)\n  .map(([proj, platforms]) => `📁 ${proj}: ${platforms.join(', ')}`)\n  .join('\\n');\n\nreturn [{ json: { summary, total: items.length } }];"
+      },
+      "id": "summarize",
+      "name": "Summarize Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=✅ Генерация завершена! {{ $json.total }} постов готовы к проверке.\n\n{{ $json.summary }}\n\n👉 Одобри в Notion: https://notion.so/YOUR_CONTENT_CALENDAR_PAGE",
+        "additionalFields": {}
+      },
+      "id": "notify",
+      "name": "Notify — Done",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        1700,
+        300
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "YOUR_NOTION_KNOWLEDGE_BASE_DB_ID",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Applied",
+              "condition": "equals",
+              "value": true
+            }
+          ]
+        },
+        "limit": 10
+      },
+      "id": "get-kb",
+      "name": "Get Knowledge Base",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        300,
+        400
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 8AM": {
+      "main": [
+        [
+          {
+            "node": "Get Active Projects",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Today Trends",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Active Projects": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Today Trends": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Split into Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split into Tasks": {
+      "main": [
+        [
+          {
+            "node": "Claude API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API": {
+      "main": [
+        [
+          {
+            "node": "Extract Generated Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Generated Text": {
+      "main": [
+        [
+          {
+            "node": "Save to Content Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Content Calendar": {
+      "main": [
+        [
+          {
+            "node": "Summarize Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Results": {
+      "main": [
+        [
+          {
+            "node": "Notify — Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

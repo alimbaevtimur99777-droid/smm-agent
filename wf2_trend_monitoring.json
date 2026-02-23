@@ -1,0 +1,171 @@
+{
+  "name": "WF2 — Trend Monitoring (FIXED)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 7 * * *" }] }
+      },
+      "id": "trigger",
+      "name": "Daily 7AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://trends.google.com/trends/trendingsearches/daily/rss?geo=UZ",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; SMM-Agent/1.0)" }]
+        },
+        "options": { "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "trends-uz",
+      "name": "Google Trends UZ",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [300, 180]
+    },
+    {
+      "parameters": {
+        "url": "https://trends.google.com/trends/trendingsearches/daily/rss?geo=RU",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; SMM-Agent/1.0)" }]
+        },
+        "options": { "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "trends-ru",
+      "name": "Google Trends RU",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [300, 340]
+    },
+    {
+      "parameters": {
+        "url": "https://vc.ru/rss",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; SMM-Agent/1.0)" }]
+        },
+        "options": { "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "rss-vc",
+      "name": "RSS VC.ru",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [300, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "merge-sources",
+      "name": "Merge Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [500, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Объединяем все тексты из разных источников\nconst allItems = $input.all();\nconst trends = new Set();\n\nfor (const item of allItems) {\n  // httpRequest с responseFormat:text кладёт результат в data\n  const body = item.json?.data || item.json?.body || JSON.stringify(item.json) || '';\n  \n  // Парсим CDATA titles (Google Trends format)\n  const cdataTitles = [...body.matchAll(/<title><!\\[CDATA\\[([^\\]]+)\\]\\]><\\/title>/g)].map(m => m[1].trim());\n  \n  // Парсим обычные titles (RSS format)\n  const plainTitles = [...body.matchAll(/<title>([^<]{5,100})<\\/title>/g)]\n    .map(m => m[1].trim())\n    .filter(t => !t.includes('<?') && !t.includes('http'));\n  \n  cdataTitles.forEach(t => trends.add(t));\n  plainTitles.slice(0, 15).forEach(t => trends.add(t));\n}\n\nconst trendList = [...trends].filter(t => t.length > 3).slice(0, 25);\n\nreturn [{ json: { trends: trendList, date: new Date().toISOString().split('T')[0], count: trendList.length } }];"
+      },
+      "id": "parse-trends",
+      "name": "Parse All Trends",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 900,\n  \"system\": \"Ты аналитик трендов. Отвечай строго JSON без markdown.\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Тренды дня ({{ $json.count }} штук):\\n{{ $json.trends.join('\\\\n') }}\\n\\nПроанализируй для 3 проектов и верни JSON:\\n{\\n  \\\"personal_brand\\\": {\\\"trend\\\": \\\"\\\", \\\"idea\\\": \\\"\\\", \\\"category\\\": \\\"\\\"},\\n  \\\"leader_team\\\": {\\\"trend\\\": \\\"\\\", \\\"idea\\\": \\\"\\\", \\\"category\\\": \\\"\\\"},\\n  \\\"pixie\\\": {\\\"trend\\\": \\\"\\\", \\\"idea\\\": \\\"\\\", \\\"category\\\": \\\"\\\"}\\n}\\n\\nПроекты:\\n- personal_brand: маркетинг-эксперт, вдохновляющий тон, рус/узб аудитория\\n- leader_team: B2B продажи телеком оборудования, деловой\\n- pixie: производство телеком оборудования, технологичный\\n\\nВерни ТОЛЬКО JSON.\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "claude-analyze",
+      "name": "Claude — Analyze Trends",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst rawText = response.content?.[0]?.text || '{}';\nconst date = $('Parse All Trends').item.json.date;\n\nlet analysis = {};\ntry {\n  // Убираем возможные markdown блоки\n  const clean = rawText.replace(/```json|```/g, '').trim();\n  analysis = JSON.parse(clean);\n} catch(e) {\n  // Пробуем найти JSON в тексте\n  const match = rawText.match(/\\{[\\s\\S]*\\}/);\n  if (match) {\n    try { analysis = JSON.parse(match[0]); } catch(e2) { analysis = { parse_error: rawText }; }\n  }\n}\n\nreturn [{ json: { analysis, date, rawText } }];"
+      },
+      "id": "parse-response",
+      "name": "Parse Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 340]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "YOUR_NOTION_TRENDS_DB_ID",
+        "title": "={{ $json.date }} — Дайджест трендов",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Date", "type": "date", "dateValue": "={{ $json.date }}" },
+            { "key": "Personal Brand Trend", "type": "rich_text", "textValue": "={{ $json.analysis.personal_brand?.trend || '' }}" },
+            { "key": "Personal Brand Idea", "type": "rich_text", "textValue": "={{ $json.analysis.personal_brand?.idea || '' }}" },
+            { "key": "Leader Team Trend", "type": "rich_text", "textValue": "={{ $json.analysis.leader_team?.trend || '' }}" },
+            { "key": "Leader Team Idea", "type": "rich_text", "textValue": "={{ $json.analysis.leader_team?.idea || '' }}" },
+            { "key": "Pixie Trend", "type": "rich_text", "textValue": "={{ $json.analysis.pixie?.trend || '' }}" },
+            { "key": "Pixie Idea", "type": "rich_text", "textValue": "={{ $json.analysis.pixie?.idea || '' }}" }
+          ]
+        }
+      },
+      "id": "save-trends",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1300, 340],
+      "credentials": { "notionApi": { "id": "YOUR_NOTION_CREDENTIAL_ID", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🔥 Тренды {{ $json.date }}\n\n👤 ЛИЧНЫЙ БРЕНД\n📌 {{ $json.analysis.personal_brand?.trend || 'нет данных' }}\n💡 {{ $json.analysis.personal_brand?.idea || '' }}\n\n🏢 ЛИДЕР ТИМ\n📌 {{ $json.analysis.leader_team?.trend || 'нет данных' }}\n💡 {{ $json.analysis.leader_team?.idea || '' }}\n\n⚡ ПИКСИ\n📌 {{ $json.analysis.pixie?.trend || 'нет данных' }}\n💡 {{ $json.analysis.pixie?.idea || '' }}",
+        "additionalFields": {}
+      },
+      "id": "notify-trends",
+      "name": "Send Trends",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1500, 340],
+      "credentials": { "telegramApi": { "id": "YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    }
+  ],
+  "connections": {
+    "Daily 7AM": {
+      "main": [[
+        { "node": "Google Trends UZ", "type": "main", "index": 0 },
+        { "node": "Google Trends RU", "type": "main", "index": 0 },
+        { "node": "RSS VC.ru", "type": "main", "index": 0 }
+      ]]
+    },
+    "Google Trends UZ": { "main": [[{ "node": "Merge Sources", "type": "main", "index": 0 }]] },
+    "Google Trends RU": { "main": [[{ "node": "Merge Sources", "type": "main", "index": 1 }]] },
+    "RSS VC.ru": { "main": [[{ "node": "Merge Sources", "type": "main", "index": 2 }]] },
+    "Merge Sources": { "main": [[{ "node": "Parse All Trends", "type": "main", "index": 0 }]] },
+    "Parse All Trends": { "main": [[{ "node": "Claude — Analyze Trends", "type": "main", "index": 0 }]] },
+    "Claude — Analyze Trends": { "main": [[{ "node": "Parse Claude Response", "type": "main", "index": 0 }]] },
+    "Parse Claude Response": { "main": [[{ "node": "Save to Notion", "type": "main", "index": 0 }]] },
+    "Save to Notion": { "main": [[{ "node": "Send Trends", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
